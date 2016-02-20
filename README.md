@@ -1,2 +1,4 @@
 # cassdump
-cassandra dump to cql (experimental)
+cassandra3 dump to cql (experimental)
+
+feel free to provide pull requests!
