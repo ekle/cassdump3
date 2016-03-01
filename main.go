@@ -3,6 +3,8 @@ package main
 import (
 	"flag"
 	"fmt"
+	"log"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -17,8 +19,8 @@ var cIP = flag.String("h", "127.0.0.1", "host or IP of a running cluster node")
 var cUSER = flag.String("u", "", "username for the cluster")
 var cPASS = flag.String("p", "", "password for the cluster")
 
-var cKEYSPACE_EXCLUDE = flag.String("e", "system_schema,system_auth,system,system_traces,system_distributed", "keyspaces which should not be dumped")
-var cKEYSPACE_INCLUDE = flag.String("i", "", "dump only this keyspaces")
+var cEXCLUDE = flag.String("e", "system,system_schema,system_traces,system_distributed", "keyspaces/tables which should not be dumped")
+var cINCLUDE = flag.String("i", "", "dump only this keyspaces")
 
 var con *gocql.Session
 
@@ -31,10 +33,20 @@ func main() {
 	var err error
 	con, err = connect(*cIP, *cUSER, *cPASS)
 	FatalIfError("connect", err)
-	keyspaces := getKeyspaces(StringListToArray(*cKEYSPACE_INCLUDE), StringListToArray(*cKEYSPACE_EXCLUDE))
-
+	include := StringListToArray(*cINCLUDE)
+	exclude := StringListToArray(*cEXCLUDE)
+	keyspaces := getKeyspaces(include, exclude)
+	ok := true
 	for _, keyspace := range keyspaces {
-		dumpKeyspace(keyspace)
+		if !dumpKeyspace(keyspace, include, exclude) {
+			ok = false
+		}
+	}
+	if ok == true {
+		os.Exit(0)
+	} else {
+		log.Print("Could not dump all data")
+		os.Exit(1)
 	}
 }
 
@@ -58,7 +70,7 @@ func connect(ip, user, pass string) (*gocql.Session, error) {
 	return cluster.CreateSession()
 }
 
-func dumpKeyspace(keyspace Keyspace) {
+func dumpKeyspace(keyspace Keyspace, include []string, exclude []string) bool {
 	title("dumping keyspace " + keyspace.Keyspace_name + " at " + time.Now().String())
 	fmt.Println("use", keyspace.Keyspace_name, ";\n")
 	types := getTypes(keyspace)
@@ -69,9 +81,20 @@ func dumpKeyspace(keyspace Keyspace) {
 	for _, table := range tables {
 		dumpKeyspaceTablesDef(keyspace, table)
 	}
+	ok := true
+tl:
 	for _, table := range tables {
-		dumpDataTable(keyspace, table)
+		for _, et := range exclude {
+			if et == keyspace.Keyspace_name+"."+table.Table_name {
+				fmt.Print("-- skipping ", keyspace.Keyspace_name+"."+table.Table_name)
+				continue tl
+			}
+		}
+		if !dumpDataTable(keyspace, table) {
+			ok = false
+		}
 	}
+	return ok
 }
 
 func dumpKeyspaceTablesDef(keyspace Keyspace, table Table) {
@@ -150,7 +173,7 @@ func dumpKeyspaceType(t Type) {
 	fmt.Println(");\n")
 }
 
-func dumpDataTable(keyspace Keyspace, table Table) {
+func dumpDataTable(keyspace Keyspace, table Table) bool {
 	title("dumping " + keyspace.Keyspace_name + "." + table.Table_name)
 	iter := con.Query("SELECT JSON * from " + keyspace.Keyspace_name + "." + table.Table_name).Iter()
 	var json string
@@ -161,6 +184,11 @@ func dumpDataTable(keyspace Keyspace, table Table) {
 		count++
 	}
 	fmt.Println("-- dumped", count, "rows")
-	FatalIfError("dumpdata", iter.Close())
+	//FatalIfError("dumpdata", iter.Close())
+	if err := iter.Close(); err != nil {
+		log.Println("-- ", keyspace.Keyspace_name, ".", table.Table_name, ": ", err.Error(), "\n")
+		return false
+	}
 	fmt.Println()
+	return true
 }
