@@ -1,9 +1,9 @@
 run: build
-	./cassdump -help
+	./cassdump3 -help
 	@echo "-------------------------------------------"
-	./cassdump
+	./cassdump3
 
 build:
-	go build -o cassdump
+	go build -o cassdump3
 
 
