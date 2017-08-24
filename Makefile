@@ -4,6 +4,6 @@ run: build
 	./cassdump3
 
 build:
-	go build -o cassdump3
+	go build -ldflags "-s -w" -o cassdump3
 
 

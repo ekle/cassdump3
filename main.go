@@ -15,12 +15,16 @@ import (
 var cHELP = flag.Bool("help", false, "show help")
 var cIP = flag.String("h", "127.0.0.1", "host or IP of a running cluster node")
 
-//var cPORT = flag.String("p", "9042", "port number for the cluster node")
 var cUSER = flag.String("u", "", "username for the cluster")
 var cPASS = flag.String("p", "", "password for the cluster")
 
+var cCertFile = flag.String("cf", "", "CertFile for authentication")
+var cKeyFile = flag.String("ck", "", "KeyFile for authentication")
+
 var cEXCLUDE = flag.String("e", "system,system_schema,system_traces,system_distributed", "keyspaces/tables which should not be dumped")
 var cINCLUDE = flag.String("i", "", "dump only this keyspaces")
+
+var cConsistency = flag.String("c", "quorum", "Consistency Level: All, Quorum, LocalQuorum")
 
 var con *gocql.Session
 
@@ -31,7 +35,7 @@ func main() {
 		return
 	}
 	var err error
-	con, err = connect(*cIP, *cUSER, *cPASS)
+	con, err = connect(*cIP, *cUSER, *cPASS, *cCertFile, *cKeyFile)
 	FatalIfError("connect", err)
 	include := StringListToArray(*cINCLUDE)
 	exclude := StringListToArray(*cEXCLUDE)
@@ -50,21 +54,60 @@ func main() {
 	}
 }
 
-func connect(ip, user, pass string) (*gocql.Session, error) {
+// RetryPolicy satisfies the gocql RetryPolicy interface
+type RetryPolicy struct {
+	NumRetries           int
+	SleepBetweenAttempts time.Duration
+}
+
+// Attempt tells gocql to attempt the query again based on query.Attempts being less
+// than the NumRetries defined in the policy.
+func (s *RetryPolicy) Attempt(q gocql.RetryableQuery) bool {
+	a := q.Attempts()
+	if a > 1 {
+		time.Sleep(s.SleepBetweenAttempts * time.Duration(a))
+	}
+	return a <= s.NumRetries
+}
+
+func connect(ip, user, pass, certFile, keyFile string) (*gocql.Session, error) {
 	cluster := gocql.NewCluster(ip)
 	cluster.Keyspace = ""
-	cluster.Consistency = gocql.Quorum
-	cluster.ProtoVersion = 3
-	cluster.RetryPolicy = &gocql.SimpleRetryPolicy{NumRetries: 3}
-	cluster.Discovery = gocql.DiscoveryConfig{}
+	conlevel := strings.ToLower(*cConsistency)
+	switch conlevel {
+	case "all":
+		cluster.Consistency = gocql.All
+	case "localquorum":
+		cluster.Consistency = gocql.LocalQuorum
+	case "quorum":
+		cluster.Consistency = gocql.Quorum
+	default:
+		cluster.Consistency = gocql.Quorum
+	}
+	title("dumping with Consistency: " + cluster.Consistency.String())
+	cluster.ProtoVersion = 4
+	cluster.RetryPolicy = &RetryPolicy{NumRetries: 10, SleepBetweenAttempts: 100 * time.Millisecond}
+	cluster.SocketKeepalive = time.Second * 10
+	cluster.PoolConfig.HostSelectionPolicy = gocql.RoundRobinHostPolicy()
+	cluster.Timeout = time.Second * 3
 	cluster.NumConns = 1
 	cluster.SocketKeepalive = time.Second * 10
+	cluster.DisableInitialHostLookup = true
+	cluster.Events.DisableNodeStatusEvents = true
+	cluster.Events.DisableSchemaEvents = true
+	cluster.Events.DisableTopologyEvents = true
 
 	if user != "" {
 		auth := gocql.PasswordAuthenticator{}
 		auth.Username = user
 		auth.Password = pass
 		cluster.Authenticator = auth
+	}
+	if certFile != "" {
+		if keyFile == "" {
+			keyFile = certFile
+		}
+		cluster.SslOpts = &gocql.SslOptions{CertPath: certFile, KeyPath: keyFile}
 	}
 
 	return cluster.CreateSession()
