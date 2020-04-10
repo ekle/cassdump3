@@ -54,22 +54,6 @@ func main() {
 	}
 }
 
-// RetryPolicy satisfies the gocql RetryPolicy interface
-type RetryPolicy struct {
-	NumRetries           int
-	SleepBetweenAttempts time.Duration
-}
-
-// Attempt tells gocql to attempt the query again based on query.Attempts being less
-// than the NumRetries defined in the policy.
-func (s *RetryPolicy) Attempt(q gocql.RetryableQuery) bool {
-	a := q.Attempts()
-	if a > 1 {
-		time.Sleep(s.SleepBetweenAttempts * time.Duration(a))
-	}
-	return a <= s.NumRetries
-}
-
 func connect(ip, user, pass, certFile, keyFile string) (*gocql.Session, error) {
 	cluster := gocql.NewCluster(ip)
 	cluster.Keyspace = ""
@@ -86,7 +70,7 @@ func connect(ip, user, pass, certFile, keyFile string) (*gocql.Session, error) {
 	}
 	title("dumping with Consistency: " + cluster.Consistency.String())
 	cluster.ProtoVersion = 4
-	cluster.RetryPolicy = &RetryPolicy{NumRetries: 10, SleepBetweenAttempts: 100 * time.Millisecond}
+	cluster.RetryPolicy = &gocql.ExponentialBackoffRetryPolicy{NumRetries: 10, Min: 100 * time.Millisecond, Max: time.Second}
 	cluster.SocketKeepalive = time.Second * 10
 	cluster.PoolConfig.HostSelectionPolicy = gocql.RoundRobinHostPolicy()
 	cluster.Timeout = time.Second * 3
